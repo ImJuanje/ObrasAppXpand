@@ -17,7 +17,7 @@ async function fail(key, r) {
   await db("rate").setJSON(key, r);
 }
 
-export default async (req) => {
+async function handle(req) {
   const action = new URL(req.url).pathname.replace(/^\/api\//, "");
   const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
   const users = db("users"), invites = db("invites"), cfg = db("settings"), obras = db("obras"), clientes = db("clientes");
@@ -250,4 +250,13 @@ export default async (req) => {
   }
 
   return json({ error: "No encontrado." }, 404);
+}
+
+export default async (req) => {
+  try {
+    return await handle(req);
+  } catch (e) {
+    console.error(e);
+    return json({ error: "Fallo del servidor: " + (e && e.message ? e.message : e) }, 500);
+  }
 };
