@@ -83,3 +83,11 @@ label.chip{position:relative;display:block;margin:0;font-weight:500}
 .old{margin:0 0 14px}.old summary{padding:6px 0 12px;font-weight:600}
 .box>dl:first-child{margin:0;padding:0;border:0}
 .row:has(+.tot){border-bottom:0}
+.stabs{overflow-x:auto;gap:18px;scrollbar-width:none}.stabs button{white-space:nowrap}
+.pb{height:8px;border-radius:99px;background:var(--linea);overflow:hidden;margin:6px 0 0}.pb i{display:block;height:100%;background:var(--verde);border-radius:99px}
+.fase{margin:0 0 16px}.fh{display:flex;justify-content:space-between;gap:10px}
+#rows .pc{flex:none;width:84px;min-width:0}
+.hf{display:grid;gap:10px;border:1px solid var(--linea);border-radius:10px;padding:12px;margin:0 0 10px}
+.hf2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.hf3{display:flex;justify-content:space-between;align-items:center}.hf3 label{margin:0}.hf3 button{margin:0}
+.badge.e-Cobrado{background:var(--verde2);color:var(--verde)}.badge.e-Vencido{background:var(--rojo2);color:var(--rojo)}
+.badge.e-En-ejecución{background:#e4edf7;color:#1f4f86}.badge.e-Pendiente-de-cierre{background:var(--ambar2);color:var(--ambar)}.badge.e-Terminada{background:var(--verde2);color:var(--verde)}
