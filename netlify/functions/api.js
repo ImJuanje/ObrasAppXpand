@@ -17,38 +17,59 @@ async function fail(key, r) {
   await db("rate").setJSON(key, r);
 }
 
-export default async (req) => {
+class Conflict extends Error {}
+
+const handle = async (req) => {
   const action = new URL(req.url).pathname.replace(/^\/api\//, "");
   const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
   const users = db("users"), invites = db("invites"), cfg = db("settings"), obras = db("obras"), clientes = db("clientes");
   const ses = sessionOf(req);
+  const tags = new WeakMap();
+  const getO = async (id) => { const r = await obras.getWithMetadata(String(id || ""), { type: "json" }); if (!r || !r.data) return null; tags.set(r.data, r.etag); return r.data; };
+  const save = async (o) => { const t = tags.get(o); const r = await obras.setJSON(o.id, o, t ? { onlyIfMatch: t } : { onlyIfNew: true }); if (!r.modified) throw new Conflict(); tags.set(o, r.etag); };
 
   if (action === "login") {
     const user = clean(body.user), ip = req.headers.get("x-nf-client-connection-ip") || "x";
     const key = `${ip}:${user}`, { r, blocked } = await limited(key);
     if (blocked) return json({ error: "Demasiados intentos. Prueba en 15 minutos." }, 429);
-    let ok = false, role = "operario";
+    let ok = false, role = "operario", c;
     if (user === "admin") {
       const a = Buffer.from(String(body.password || "")), b = Buffer.from(process.env.ADMIN_PASSWORD || "");
       ok = !!b.length && a.length === b.length && crypto.timingSafeEqual(a, b); role = "admin";
     } else {
       const u = await users.get(user, { type: "json" });
       ok = !!u && checkPw(String(body.password || ""), u.hash);
+      c = u && u.created;
     }
     if (!ok) { await fail(key, r); return json({ error: "Usuario o contraseña incorrectos." }, 401); }
     await db("rate").delete(key);
     const age = body.remember ? 30 * DAY : DAY;
-    return json({ user, role }, 200, { "set-cookie": cookie(makeToken({ user, role, exp: Date.now() + age }), body.remember ? age / 1000 : 0) });
+    return json({ user, role }, 200, { "set-cookie": cookie(makeToken({ user, role, c, exp: Date.now() + age }), body.remember ? age / 1000 : 0) });
   }
 
   if (action === "activate") {
     const user = clean(body.user), code = String(body.code || "").trim().toUpperCase();
     if (user.length < 3 || user === "admin" || String(body.password || "").length < 8)
       return json({ error: "Usuario mínimo 3 caracteres y contraseña mínimo 8." }, 400);
-    const inv = await invites.get(code, { type: "json" });
-    if (!inv || inv.exp < Date.now()) return json({ error: "Código no válido o caducado." }, 400);
+    const ck = `${req.headers.get("x-nf-client-connection-ip") || "x"}:code`, cl = await limited(ck);
+    if (cl.blocked) return json({ error: "Demasiados intentos. Prueba en 15 minutos." }, 429);
+    const inv = code ? await invites.get(code, { type: "json" }) : null;
+    if (!inv || inv.reset || inv.exp < Date.now()) { await fail(ck, cl.r); return json({ error: "Código no válido o caducado." }, 400); }
     if (await users.get(user)) return json({ error: "Ese usuario ya existe." }, 409);
     await users.setJSON(user, { hash: hashPw(body.password), created: Date.now() });
+    await invites.delete(code);
+    return json({ ok: true });
+  }
+
+  if (action === "reset-password") {
+    const code = String(body.code || "").trim().toUpperCase();
+    if (String(body.password || "").length < 8) return json({ error: "La contraseña necesita mínimo 8 caracteres." }, 400);
+    const ck = `${req.headers.get("x-nf-client-connection-ip") || "x"}:code`, cl = await limited(ck);
+    if (cl.blocked) return json({ error: "Demasiados intentos. Prueba en 15 minutos." }, 429);
+    const inv = code ? await invites.get(code, { type: "json" }) : null;
+    const u = inv && inv.reset && inv.exp > Date.now() ? await users.get(inv.reset, { type: "json" }) : null;
+    if (!u) { await fail(ck, cl.r); return json({ error: "Código no válido o caducado." }, 400); }
+    await users.setJSON(inv.reset, { ...u, hash: hashPw(body.password), created: Date.now() });
     await invites.delete(code);
     return json({ ok: true });
   }
@@ -57,7 +78,7 @@ export default async (req) => {
   const byToken = async (t) => {
     t = String(t || "");
     const id = /^[a-f0-9]{48}$/.test(t) ? await db("tokens").get(t) : null;
-    return id ? await obras.get(id, { type: "json" }) : null;
+    return id ? await getO(id) : null;
   };
   if (action === "portal-get") {
     const o = await byToken(body.t);
@@ -86,11 +107,15 @@ export default async (req) => {
     item.decision = { fecha: now, motivo };
     (item.historial = item.historial || []).push({ fecha: now, quien: "cliente", accion: si ? "Aprobado por el cliente" : "Rechazado por el cliente", motivo, ip: req.headers.get("x-nf-client-connection-ip") || "" });
     if (si && body.tipo === "presupuesto" && o.estado === "Presupuesto") o.estado = "Aprobada";
-    await obras.setJSON(o.id, o);
+    await save(o);
     return json({ ok: true });
   }
 
   if (!ses) return json({ error: "Sesión no válida." }, 401);
+  if (ses.role !== "admin") {
+    const u = await users.get(ses.user, { type: "json" });
+    if (!u || u.created !== ses.c) return json({ error: "Tu acceso ya no está activo. Entra de nuevo." }, 401);
+  }
   if (action === "me") return json({ user: ses.user, role: ses.role });
 
   if (action === "settings-get") return json((await cfg.get("main", { type: "json" })) || DEFAULT_SETTINGS);
@@ -101,14 +126,14 @@ export default async (req) => {
   if (action === "obras-list") {
     const all = await Promise.all((await obras.list()).blobs.map((b) => obras.get(b.key, { type: "json" })));
     return json(all.filter((o) => o && visible(o)).sort((a, b) => b.created - a.created)
-      .map((o) => ({ id: o.id, cliente: o.cliente.nombre, direccion: o.direccion, estado: o.estado, asignado: o.asignado })));
+      .map((o) => ({ id: o.id, cliente: o.cliente.nombre, direccion: o.direccion, estado: o.estado, asignado: o.asignado, tel: o.cliente.tel })));
   }
   if (action === "obra-get") {
-    const o = await obras.get(String(body.id || ""), { type: "json" });
+    const o = await getO(body.id);
     return o && visible(o) ? json(strip(o)) : json({ error: "Obra no encontrada." }, 404);
   }
 
-  const getObra = async (id) => { const o = await obras.get(String(id || ""), { type: "json" }); return o && visible(o) ? o : null; };
+  const getObra = async (id) => { const o = await getO(id); return o && visible(o) ? o : null; };
   const okEstado = (m) => m.estado === "Aprobado" || m.estado === "Desbloqueado";
   if (action === "foto") {
     const u = new URL(req.url).searchParams, o = await getObra(u.get("obra")), k = String(u.get("k") || "");
@@ -132,7 +157,7 @@ export default async (req) => {
     await Promise.all(fotos.map((f, i) => db("fotos").set(`${o.id}_${id}_${i}`, f.replace(/^data:image\/jpeg;base64,/, ""))));
     o.modificados = o.modificados || [];
     o.modificados.push({ id, n: o.modificados.length + 1, desc, partida, plazo, coste, fotos: fotos.length, estado: "Borrador", por: ses.user, fecha: Date.now(), historial: [{ fecha: Date.now(), quien: ses.user, accion: "Creado" }] });
-    await obras.setJSON(o.id, o);
+    await save(o);
     return json({ ok: true });
   }
 
@@ -145,6 +170,20 @@ export default async (req) => {
     await cfg.setJSON("main", { tipos, iva });
     return json({ ok: true });
   }
+  if (action === "backup") {
+    const all = async (st) => Promise.all((await db(st).list()).blobs.map(async (b) => [b.key, await db(st).get(b.key, { type: "json" })]));
+    const fotos = {}; let bytes = 0, omitidas = 0;
+    for (const b of (await db("fotos").list()).blobs) { const v = await db("fotos").get(b.key); if (v && bytes + v.length <= 3500000) { fotos[b.key] = v; bytes += v.length; } else omitidas++; }
+    return json({ app: "obras", version: 1, fecha: Date.now(), ajustes: (await cfg.get("main", { type: "json" })) || DEFAULT_SETTINGS,
+      operarios: (await users.list()).blobs.map((b) => b.key), clientes: Object.fromEntries(await all("clientes")), obras: (await all("obras")).map(([, o]) => o), fotos, fotosOmitidas: omitidas });
+  }
+  if (action === "reset-create") {
+    const user = clean(body.user);
+    if (!user || !(await users.get(user))) return json({ error: "Ese operario no existe." }, 404);
+    const code = crypto.randomBytes(4).toString("hex").toUpperCase();
+    await invites.setJSON(code, { exp: Date.now() + DAY, reset: user });
+    return json({ code });
+  }
   if (action === "invite-create") {
     const code = crypto.randomBytes(4).toString("hex").toUpperCase();
     await invites.setJSON(code, { exp: Date.now() + 3 * DAY });
@@ -156,7 +195,22 @@ export default async (req) => {
     const i = await Promise.all((await invites.list()).blobs.map(async (b) => ({ code: b.key, ...(await invites.get(b.key, { type: "json" })) })));
     return json({ users: u, invites: i.filter((x) => x.exp > Date.now()) });
   }
-  if (action === "user-delete") { await users.delete(clean(body.user)); return json({ ok: true }); }
+  if (action === "user-delete") {
+    const u = clean(body.user);
+    if (!u || u === "admin") return json({ error: "Usuario no válido." }, 400);
+    await users.delete(u);
+    let n = 0;
+    for (const b of (await obras.list()).blobs) {
+      for (let t = 0; t < 3; t++) {
+        const o = await getO(b.key);
+        if (!o || o.asignado !== u) break;
+        o.asignado = "admin";
+        (o.historial = o.historial || []).push({ fecha: Date.now(), quien: ses.user, accion: `Reasignada al admin por la baja de ${u}` });
+        try { await save(o); n++; break; } catch (e) { if (!(e instanceof Conflict)) throw e; }
+      }
+    }
+    return json({ ok: true, reasignadas: n });
+  }
 
   if (action === "cliente-buscar") return json((await clientes.get(tel(body.tel), { type: "json" })) || null);
   if (action === "obra-save") {
@@ -166,28 +220,29 @@ export default async (req) => {
     if (asignado !== "admin" && !(await users.get(asignado))) return json({ error: "El operario asignado no existe." }, 400);
     const iva = Number(body.iva);
     if (!(iva >= 0 && iva <= 30)) return json({ error: "IVA no válido." }, 400);
-    const prev = body.id ? await obras.get(String(body.id), { type: "json" }) : null;
+    const prev = body.id ? await getO(body.id) : null;
     if (body.id && !prev) return json({ error: "Obra no encontrada." }, 404);
     const o = { ...(prev || { id: crypto.randomBytes(6).toString("hex"), estado: "Presupuesto", presupuestos: [], created: Date.now() }),
       cliente: { nombre, tel: t }, direccion, asignado, iva, otro: String(body.otro || "").slice(0, 120),
       tipos: (body.tipos || []).map((x) => String(x).trim().slice(0, 40)).filter(Boolean).slice(0, 10),
       inicio: String(body.inicio || "").slice(0, 10), fin: String(body.fin || "").slice(0, 10) };
+    if (prev) tags.set(o, tags.get(prev));
     await clientes.setJSON(t, { nombre, tel: t });
-    await obras.setJSON(o.id, o);
+    await save(o);
     return json({ id: o.id });
   }
   if (action === "presupuesto-add") {
-    const o = await obras.get(String(body.id || ""), { type: "json" });
+    const o = await getO(body.id);
     if (!o) return json({ error: "Obra no encontrada." }, 404);
     const partidas = (body.partidas || []).map((p) => ({ desc: String(p.desc || "").trim().slice(0, 160), importe: Math.round(Number(p.importe) * 100) / 100 })).filter((p) => p.desc);
     if (!partidas.length || partidas.some((p) => !(p.importe >= 0))) return json({ error: "Cada partida necesita descripción e importe." }, 400);
     o.presupuestos.push({ v: o.presupuestos.length + 1, fecha: Date.now(), nota: String(body.nota || "").slice(0, 300), partidas });
-    await obras.setJSON(o.id, o);
+    await save(o);
     return json({ v: o.presupuestos.length });
   }
 
   if (action === "modificado-edit" || action === "modificado-desbloquear") {
-    const o = await obras.get(String(body.id || ""), { type: "json" }), m = o && (o.modificados || []).find((x) => x.id === body.mid);
+    const o = await getO(body.id), m = o && (o.modificados || []).find((x) => x.id === body.mid);
     if (!m) return json({ error: "Modificado no encontrado." }, 404);
     if (action === "modificado-edit") {
       if (m.estado !== "Borrador") return json({ error: "Solo se puede editar mientras es borrador." }, 400);
@@ -204,12 +259,12 @@ export default async (req) => {
       m.estado = "Desbloqueado";
       m.historial.push({ fecha: Date.now(), quien: ses.user, accion: "Desbloqueado sin ok del cliente", motivo });
     }
-    await obras.setJSON(o.id, o);
+    await save(o);
     return json({ ok: true });
   }
 
   const ESTADOS = ["Presupuesto", "Aprobada", "En ejecución", "Pendiente de cierre", "Terminada"];
-  const loadObra = async () => obras.get(String(body.id || ""), { type: "json" });
+  const loadObra = async () => getO(body.id);
   if (action === "obra-estado") {
     const o = await loadObra();
     if (!o) return json({ error: "Obra no encontrada." }, 404);
@@ -217,7 +272,7 @@ export default async (req) => {
     if (from < 1 || to < 1 || Math.abs(to - from) !== 1) return json({ error: "Cambio de estado no permitido." }, 400);
     o.estado = ESTADOS[to];
     (o.historial = o.historial || []).push({ fecha: Date.now(), quien: ses.user, accion: `Estado: ${ESTADOS[from]} → ${o.estado}` });
-    await obras.setJSON(o.id, o);
+    await save(o);
     return json({ ok: true });
   }
   if (action === "fases-set") {
@@ -226,7 +281,7 @@ export default async (req) => {
     const fases = (body.fases || []).slice(0, 12).map((f) => ({ nombre: String(f.nombre || "").trim().slice(0, 60), pct: Math.round(Number(f.pct)) })).filter((f) => f.nombre);
     if (fases.some((f) => !(f.pct >= 0 && f.pct <= 100))) return json({ error: "El avance de cada fase va de 0 a 100." }, 400);
     o.fases = fases;
-    await obras.setJSON(o.id, o);
+    await save(o);
     return json({ ok: true });
   }
   if (action === "hitos-set") {
@@ -235,21 +290,21 @@ export default async (req) => {
     const hitos = (body.hitos || []).slice(0, 20).map((h) => ({ concepto: String(h.concepto || "").trim().slice(0, 80), importe: Math.round(Number(h.importe) * 100) / 100, fecha: /^\d{4}-\d{2}-\d{2}$/.test(h.fecha) ? h.fecha : "", cobrado: !!h.cobrado })).filter((h) => h.concepto);
     if (hitos.some((h) => !(h.importe >= 0))) return json({ error: "Cada hito necesita concepto e importe." }, 400);
     o.hitos = hitos;
-    await obras.setJSON(o.id, o);
+    await save(o);
     return json({ ok: true });
   }
 
   if (action === "enlace-generar") {
-    const o = await obras.get(String(body.id || ""), { type: "json" });
+    const o = await getO(body.id);
     if (!o) return json({ error: "Obra no encontrada." }, 404);
     if (o.token) await db("tokens").delete(o.token);
     o.token = crypto.randomBytes(24).toString("hex");
     await db("tokens").set(o.token, o.id);
-    await obras.setJSON(o.id, o);
+    await save(o);
     return json({ token: o.token });
   }
   if (["presupuesto-enviar", "modificado-enviar", "modificado-replantear"].includes(action)) {
-    const o = await obras.get(String(body.id || ""), { type: "json" });
+    const o = await getO(body.id);
     if (!o) return json({ error: "Obra no encontrada." }, 404);
     const now = Date.now(), h = (accion) => ({ fecha: now, quien: ses.user, accion });
     if (!o.token) return json({ error: "Genera antes el enlace del cliente." }, 400);
@@ -276,9 +331,18 @@ export default async (req) => {
         m.historial.push(h("Sustituido por una versión nueva"));
       }
     }
-    await obras.setJSON(o.id, o);
+    await save(o);
     return json({ ok: true });
   }
 
   return json({ error: "No encontrado." }, 404);
+};
+
+export default async (req) => {
+  try { return await handle(req); }
+  catch (e) {
+    if (e instanceof Conflict) return json({ error: "Otra persona ha modificado esta obra a la vez. Vuelve a intentarlo." }, 409);
+    console.error(e);
+    return json({ error: "Algo ha fallado. Inténtalo de nuevo en unos segundos." }, 500);
+  }
 };

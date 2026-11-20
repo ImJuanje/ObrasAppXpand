@@ -25,10 +25,12 @@ export function makeToken(payload) {
 }
 export function readToken(t) {
   if (!SECRET() || !t) return null;
-  const [body, sig] = t.split(".");
-  if (!body || !sig || sig !== sign(body)) return null;
-  const p = JSON.parse(Buffer.from(body, "base64url").toString());
-  return p.exp > Date.now() ? p : null;
+  try {
+    const [body, sig] = t.split(".");
+    if (!body || !sig || sig !== sign(body)) return null;
+    const p = JSON.parse(Buffer.from(body, "base64url").toString());
+    return p.exp > Date.now() ? p : null;
+  } catch { return null; }
 }
 export function sessionOf(req) {
   const m = (req.headers.get("cookie") || "").match(/(?:^|; )rf=([^;]+)/);
