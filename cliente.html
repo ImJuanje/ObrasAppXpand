@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tu obra</title>
+<style>
+:root{--ink:#1f2a33;--paper:#f3f2ee;--line:#d6d3c8;--accent:#e0a100;--bad:#b3261e;--good:#2a6b2a;color-scheme:light}
+*{box-sizing:border-box}body{margin:0;font:16px/1.5 "Segoe UI",system-ui,sans-serif;background:var(--paper);color:var(--ink)}
+main{max-width:640px;margin:0 auto;padding:24px 16px}h1{font-size:1.5rem;margin:0 0 4px}h2{font-size:1.1rem;margin:24px 0 8px}
+.box{background:#fff;border:1px solid var(--line);padding:16px;margin-bottom:12px;border-radius:6px}
+.row{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line)}
+button{border:0;padding:12px 18px;border-radius:4px;font:inherit;cursor:pointer;margin:12px 8px 0 0}
+.si{background:var(--good);color:#fff}.no{background:#fff;color:var(--bad);border:1px solid var(--bad)}button:focus-visible{outline:3px solid var(--accent)}
+.bad{color:var(--bad)}.good{color:var(--good)}small{color:#555}
+</style></head><body><main id="app"><p>Cargando…</p></main>
+<script>
+const t=new URLSearchParams(location.search).get("t")||"",app=document.getElementById("app");
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const eur=n=>Number(n).toLocaleString("es-ES",{minimumFractionDigits:2,maximumFractionDigits:2})+" €";
+const fh=f=>new Date(f).toLocaleString("es-ES");
+const api=async(a,d)=>{const r=await fetch("/api/"+a,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(d)});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||"Error");return j};
+const tag=e=>e==="Aprobado"?'<b class="good">Aprobado</b>':e==="Rechazado"?'<b class="bad">Rechazado</b>':"<b>Pendiente de tu decisión</b>";
+async function load(){let o;try{o=await api("portal-get",{t})}catch(x){app.innerHTML=`<h1>Enlace no disponible</h1><p>${esc(x.message)} Pide uno nuevo a tu reformista.</p>`;return}
+const bi=p=>p.partidas.reduce((s,x)=>s+x.importe,0);
+app.innerHTML=`<h1>Tu obra</h1><p>${esc(o.cliente)} · ${esc(o.direccion)}<br>Estado: ${esc(o.estado)}</p><h2>Presupuesto</h2>${o.presupuestos.slice().reverse().map(p=>`<div class="box"><b>Versión ${p.v}</b> · ${tag(p.estado)}${p.nota?"<br>"+esc(p.nota):""}${p.partidas.map(x=>`<div class="row"><span>${esc(x.desc)}</span><span>${eur(x.importe)}</span></div>`).join("")}<p>Base ${eur(bi(p))} · IVA ${o.iva}% ${eur(bi(p)*o.iva/100)} · <b>Total ${eur(bi(p)*(1+o.iva/100))}</b></p>${p.decision?`<small>Decidido el ${fh(p.decision.fecha)}${p.decision.motivo?": "+esc(p.decision.motivo):""}</small>`:`<button class="si" data-t="presupuesto" data-i="${p.v}" data-d="aprobar">Aprobar presupuesto</button><button class="no" data-t="presupuesto" data-i="${p.v}" data-d="rechazar">Rechazar</button>`}</div>`).join("")||"<p>Todavía no hay presupuesto para revisar.</p>"}
+<h2>Cambios sobre el presupuesto</h2>${o.modificados.slice().reverse().map(m=>`<div class="box"><b>Cambio ${m.n}</b> · ${tag(m.estado)}<br>${esc(m.desc)}<br>${m.partida?"Afecta a: "+esc(m.partida):"Trabajo nuevo"}${m.plazo?" · añade "+m.plazo+" días de plazo":""}<br>Coste: ${eur(m.coste)} + IVA ${o.iva}% = <b>${eur(m.coste*(1+o.iva/100))}</b><br>${Array.from({length:m.fotos},(_,i)=>`<img src="/api/portal-foto?t=${t}&k=${m.id}_${i}" alt="Foto ${i+1}" style="height:90px;margin:6px 6px 0 0;border-radius:4px">`).join("")}${m.decision?`<br><small>Decidido el ${fh(m.decision.fecha)}${m.decision.motivo?": "+esc(m.decision.motivo):""}</small>`:`<br><small>Este trabajo no empezará hasta que lo apruebes.</small><br><button class="si" data-t="modificado" data-i="${m.id}" data-d="aprobar">Aprobar cambio</button><button class="no" data-t="modificado" data-i="${m.id}" data-d="rechazar">Rechazar</button>`}</div>`).join("")||"<p>No hay cambios pendientes.</p>"}`;
+document.querySelectorAll("button[data-d]").forEach(b=>b.onclick=async()=>{const si=b.dataset.d==="aprobar";let motivo="";
+if(si){if(!confirm("Vas a aprobar. Esta decisión no se puede deshacer."))return}else{motivo=prompt("Rechazar no se puede deshacer. Si quieres, cuéntanos el motivo:");if(motivo===null)return}
+try{await api("portal-decide",{t,tipo:b.dataset.t,id:b.dataset.i,decision:b.dataset.d,motivo});load()}catch(x){alert(x.message);load()}})}
+load();
+</script></body></html>
