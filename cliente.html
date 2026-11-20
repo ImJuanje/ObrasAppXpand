@@ -9,7 +9,7 @@ const eur=n=>Number(n).toLocaleString("es-ES",{minimumFractionDigits:2,maximumFr
 const fh=f=>new Date(f).toLocaleString("es-ES");
 const lab=e=>e==="Enviado"||e==="Pendiente"?"Pendiente de tu decisión":e;
 const bd=e=>`<span class="badge e-${esc(e).replace(/ /g,"-")}">${esc(lab(e))}</span>`;
-const api=async(a,d)=>{const r=await fetch("/api/"+a,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(d)});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||"Error");return j};
+const api=async(a,d)=>{let r;try{r=await fetch("/api/"+a,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(d)})}catch{throw new Error("Sin conexión. Revisa tu internet e inténtalo otra vez.")}const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||"Algo ha fallado. Inténtalo de nuevo.");return j};
 const acts=(tp,id)=>`<div class="acts"><button class="si" data-t="${tp}" data-i="${id}" data-d="aprobar">Aprobar</button><button class="no" data-t="${tp}" data-i="${id}" data-d="rechazar">Rechazar</button></div>`;
 const dec=d=>d?`<p class="hist">Decidido el ${fh(d.fecha)}${d.motivo?": "+esc(d.motivo):""}</p>`:"";
 const EST=["Presupuesto","Aprobada","En ejecución","Pendiente de cierre","Terminada"];const steps=e=>{const i=EST.indexOf(e);return `<ol class="steps">${EST.map((x,k)=>`<li class="${k<i?"hecho":k===i?"ahora":""}">${x}</li>`).join("")}</ol>`};
