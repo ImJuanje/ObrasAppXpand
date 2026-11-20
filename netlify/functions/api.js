@@ -62,7 +62,7 @@ export default async (req) => {
   if (action === "portal-get") {
     const o = await byToken(body.t);
     if (!o) return json({ error: "Enlace no válido o desactivado." }, 404);
-    return json({ cliente: o.cliente.nombre, direccion: o.direccion, estado: o.estado, iva: o.iva,
+    return json({ cliente: o.cliente.nombre, direccion: o.direccion, estado: o.estado, iva: o.iva, fases: o.fases || [],
       presupuestos: o.presupuestos.filter((p) => ["Enviado", "Aprobado", "Rechazado"].includes(p.estado))
         .map((p) => ({ v: p.v, fecha: p.fecha, nota: p.nota, partidas: p.partidas, estado: p.estado, decision: p.decision })),
       modificados: (o.modificados || []).filter((m) => m.estado !== "Borrador")
@@ -85,7 +85,7 @@ export default async (req) => {
     item.estado = si ? "Aprobado" : "Rechazado";
     item.decision = { fecha: now, motivo };
     (item.historial = item.historial || []).push({ fecha: now, quien: "cliente", accion: si ? "Aprobado por el cliente" : "Rechazado por el cliente", motivo, ip: req.headers.get("x-nf-client-connection-ip") || "" });
-    if (si && body.tipo === "presupuesto") o.estado = "Aprobada";
+    if (si && body.tipo === "presupuesto" && o.estado === "Presupuesto") o.estado = "Aprobada";
     await obras.setJSON(o.id, o);
     return json({ ok: true });
   }
@@ -96,7 +96,7 @@ export default async (req) => {
   if (action === "settings-get") return json((await cfg.get("main", { type: "json" })) || DEFAULT_SETTINGS);
 
   const visible = (o) => ses.role === "admin" || o.asignado === ses.user;
-  const strip = (o) => ses.role === "admin" ? o : { ...o, iva: undefined, token: undefined, presupuestos: o.presupuestos.map((p) => ({ v: p.v, fecha: p.fecha, nota: p.nota, estado: p.estado, partidas: p.partidas.map((x) => ({ desc: x.desc })) })), modificados: (o.modificados || []).map((m) => ({ ...m, coste: undefined, historial: m.historial.map(({ ip, ...h }) => h) })) };
+  const strip = (o) => ses.role === "admin" ? o : { ...o, iva: undefined, token: undefined, hitos: undefined, presupuestos: o.presupuestos.map((p) => ({ v: p.v, fecha: p.fecha, nota: p.nota, estado: p.estado, partidas: p.partidas.map((x) => ({ desc: x.desc })) })), modificados: (o.modificados || []).map((m) => ({ ...m, coste: undefined, historial: m.historial.map(({ ip, ...h }) => h) })) };
   const tel = (s) => String(s || "").replace(/\D/g, "").slice(-12);
   if (action === "obras-list") {
     const all = await Promise.all((await obras.list()).blobs.map((b) => obras.get(b.key, { type: "json" })));
@@ -204,6 +204,37 @@ export default async (req) => {
       m.estado = "Desbloqueado";
       m.historial.push({ fecha: Date.now(), quien: ses.user, accion: "Desbloqueado sin ok del cliente", motivo });
     }
+    await obras.setJSON(o.id, o);
+    return json({ ok: true });
+  }
+
+  const ESTADOS = ["Presupuesto", "Aprobada", "En ejecución", "Pendiente de cierre", "Terminada"];
+  const loadObra = async () => obras.get(String(body.id || ""), { type: "json" });
+  if (action === "obra-estado") {
+    const o = await loadObra();
+    if (!o) return json({ error: "Obra no encontrada." }, 404);
+    const from = ESTADOS.indexOf(o.estado), to = ESTADOS.indexOf(body.estado);
+    if (from < 1 || to < 1 || Math.abs(to - from) !== 1) return json({ error: "Cambio de estado no permitido." }, 400);
+    o.estado = ESTADOS[to];
+    (o.historial = o.historial || []).push({ fecha: Date.now(), quien: ses.user, accion: `Estado: ${ESTADOS[from]} → ${o.estado}` });
+    await obras.setJSON(o.id, o);
+    return json({ ok: true });
+  }
+  if (action === "fases-set") {
+    const o = await loadObra();
+    if (!o) return json({ error: "Obra no encontrada." }, 404);
+    const fases = (body.fases || []).slice(0, 12).map((f) => ({ nombre: String(f.nombre || "").trim().slice(0, 60), pct: Math.round(Number(f.pct)) })).filter((f) => f.nombre);
+    if (fases.some((f) => !(f.pct >= 0 && f.pct <= 100))) return json({ error: "El avance de cada fase va de 0 a 100." }, 400);
+    o.fases = fases;
+    await obras.setJSON(o.id, o);
+    return json({ ok: true });
+  }
+  if (action === "hitos-set") {
+    const o = await loadObra();
+    if (!o) return json({ error: "Obra no encontrada." }, 404);
+    const hitos = (body.hitos || []).slice(0, 20).map((h) => ({ concepto: String(h.concepto || "").trim().slice(0, 80), importe: Math.round(Number(h.importe) * 100) / 100, fecha: /^\d{4}-\d{2}-\d{2}$/.test(h.fecha) ? h.fecha : "", cobrado: !!h.cobrado })).filter((h) => h.concepto);
+    if (hitos.some((h) => !(h.importe >= 0))) return json({ error: "Cada hito necesita concepto e importe." }, 400);
+    o.hitos = hitos;
     await obras.setJSON(o.id, o);
     return json({ ok: true });
   }
