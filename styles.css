@@ -65,3 +65,12 @@ code.link{display:block;margin:8px 0;padding:10px 12px;background:var(--cal);bor
 .acts{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}.acts button{flex:1 1 170px;margin:0;min-height:50px}
 @media (max-width:520px){h1{font-size:1.6rem}.hero h1{font-size:2rem}.steps li{font-size:.7rem}}
 @media (prefers-reduced-motion:no-preference){button{transition:background-color .15s}}
+.lbl{margin:14px 0 8px;font-size:.9rem;font-weight:600}.lbl small{font-weight:400;color:var(--tinta2)}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+label.chip{position:relative;display:block;margin:0;font-weight:500}
+.chip input{position:absolute;opacity:0;width:1px;height:1px;min-height:0}
+.chip span{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:8px 14px;border:1px solid var(--linea2);border-radius:99px;background:#fff;font-size:.92rem;cursor:pointer}
+.chip span:hover{background:var(--cal)}
+.chip input:checked+span{background:var(--verde2);border-color:var(--verde);color:var(--verde);font-weight:600}
+.chip input:checked+span::before{content:"";width:5px;height:9px;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg) translate(-1px,-1px)}
+.chip input:focus-visible+span{outline:3px solid rgba(31,95,74,.35);outline-offset:2px}
