@@ -74,3 +74,12 @@ label.chip{position:relative;display:block;margin:0;font-weight:500}
 .chip input:checked+span{background:var(--verde2);border-color:var(--verde);color:var(--verde);font-weight:600}
 .chip input:checked+span::before{content:"";width:5px;height:9px;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg) translate(-1px,-1px)}
 .chip input:focus-visible+span{outline:3px solid rgba(31,95,74,.35);outline-offset:2px}
+.stabs{display:flex;gap:22px;border-bottom:1px solid var(--linea);margin:4px 0 18px}
+.stabs button{margin:0 0 -1px;min-height:42px;padding:8px 2px;border:0;border-bottom:3px solid transparent;border-radius:0;background:transparent;color:var(--tinta2)}
+.stabs button:hover{background:transparent;color:var(--tinta)}.stabs button.on{color:var(--tinta);border-bottom-color:var(--verde)}
+.paso{background:var(--verde2);border:1px solid #c5ddd2;border-radius:var(--r);padding:16px 18px;margin:0 0 14px}
+.paso b{font-size:1.05rem}.paso p{margin:2px 0 0;color:var(--tinta2)}.paso .btns{margin-top:12px}
+.hd{margin-top:10px}.hd summary,.old summary{cursor:pointer;color:var(--tinta2);font-size:.88rem}
+.old{margin:0 0 14px}.old summary{padding:6px 0 12px;font-weight:600}
+.box>dl:first-child{margin:0;padding:0;border:0}
+.row:has(+.tot){border-bottom:0}
